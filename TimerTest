@@ -1,0 +1,610 @@
+#include <Adafruit_GFX.h>
+#include "Adafruit_LEDBackpack.h"
+
+
+ #define BackButton 18 //button to go back
+ #define ConfirmButton 5 //button to confirm
+ #define ButtonLeft 19 //button used to go down through list of colors
+ #define ButtonRight 23  //button used to go up through list of colors
+ #define ButtonDown 4 //button used to go down through list of colors
+ #define ButtonUp 14  //button used to go up through list of colors
+
+  #define SetTimerButton 25 //enter team1 color change menu
+
+struct Timer MakeTimer(struct TimerDigit MinTens, struct TimerDigit MinOnes, struct TimerDigit SecTens, struct TimerDigit SecOnes);
+struct TimerDigit MakeTimerDigit(String Name, int Position);
+
+
+ struct TimerDigit{
+  String Name;
+  int Value;
+  int Position;
+  bool On; //true = on, false = off
+  };
+
+struct Timer{
+  int Index;
+  struct TimerDigit Digits[4];
+  int Minutes;
+  int Seconds;
+  bool TimeOver;
+  
+  int CurrTime;
+  int LastTime;
+  
+  int BlinkTime;
+  int BlinkLastTime;
+
+  int SetTime;
+  int SetLastTime;
+  
+  bool ChangeTime;
+  };
+
+
+Adafruit_7segment matrix = Adafruit_7segment();
+
+
+  struct TimerDigit MinTens;
+  struct TimerDigit MinOnes;
+  struct TimerDigit SecTens;
+  struct TimerDigit SecOnes;
+  struct Timer Timer;
+
+
+
+  int FindTime();
+
+
+    // Used for debouncing for the Confirm/Back buttons
+  unsigned long Confirm_button_time = 0;  
+  unsigned long Confirm_last_button_time = 0; 
+  unsigned long Back_button_time = 0;  
+  unsigned long Back_last_button_time = 0;
+
+
+  // Used for debouncing for the DPad buttons
+  unsigned long Up_button_time = 0;  
+  unsigned long Up_last_button_time = 0; 
+  unsigned long Down_button_time = 0;  
+  unsigned long Down_last_button_time = 0;
+  unsigned long Left_button_time = 0;  
+  unsigned long Left_last_button_time = 0; 
+  unsigned long Right_button_time = 0;  
+  unsigned long Right_last_button_time = 0;
+
+  int DebounceTime = 250;
+
+
+
+void setup() {
+
+  pinMode(ButtonDown, INPUT_PULLUP);
+  pinMode(ButtonUp, INPUT_PULLUP);
+  pinMode(ButtonRight, INPUT_PULLUP);
+  pinMode(ButtonLeft, INPUT_PULLUP);
+  pinMode(BackButton, INPUT_PULLUP);
+  pinMode(ConfirmButton, INPUT_PULLUP);
+  pinMode(SetTimerButton, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(SetTimerButton), SetTimerPressed, FALLING);
+
+  MinTens = MakeTimerDigit("MinTens", 0);
+  MinOnes = MakeTimerDigit("MinOnes", 1);
+  SecTens = MakeTimerDigit("SecTens", 3);
+  SecOnes = MakeTimerDigit("SecOnes", 4);
+
+  Timer = MakeTimer(MinTens, MinOnes, SecTens, SecOnes);
+
+  
+  // put your setup code here, to run once:
+  matrix.begin(); // setup timer seven segment display
+  matrix.writeDigitNum(0,0); // displays all 0's starting with mintens spot
+  matrix.writeDigitNum(1,0,true);  //minones
+  matrix.writeDigitNum(3,0);  //sectens
+  matrix.writeDigitNum(4,0);  //secones
+  matrix.drawColon(true);  //colon
+  matrix.writeDisplay();
+
+  
+   SplitDigits();
+
+   Serial.begin(9600);
+
+
+}
+
+void loop() {
+
+    //matrix.print(8888,DEC); // displays the number in 
+    // matrix.writeDisplay();
+
+if(Timer.ChangeTime == true){
+  Serial.println("set timer pressed");
+  SetTimer();
+  }
+
+
+if(Timer.TimeOver != true){
+  CheckTime();
+//Serial.print("Time: ");
+//Serial.println(FindTime());
+  DisplayTime();
+
+}
+else{
+  BlinkAll();
+  }
+
+
+}
+
+void CheckTime(){
+Timer.CurrTime = millis();
+//Serial.println("in checktime");
+
+//a second passed
+if(Timer.CurrTime - Timer.LastTime >= 1000){
+  if(Timer.Seconds == 0 && Timer.Minutes != 0){
+    Timer.Minutes--;
+    Timer.Seconds = 59;
+    }
+  else if(Timer.Seconds == 0 && Timer.Minutes == 0){
+    //time over
+    Timer.Minutes = 0;
+    Timer.Seconds = 0;
+    Timer.TimeOver = true;
+    Serial.println("Time over!");
+    }
+  else{
+    Timer.Seconds--;
+    }
+ SplitDigits();
+ Timer.LastTime = Timer.CurrTime;
+}
+  
+  }
+
+
+int FindTime(){
+  //Serial.println("in findtime");
+  return ((Timer.Digits[0].Value*1000)+(Timer.Digits[1].Value*100)+(Timer.Digits[2].Value*10)+Timer.Digits[3].Value);
+  }
+
+void SplitDigits(){
+  Timer.Digits[0].Value = Timer.Minutes / 10;
+  Timer.Digits[1].Value = Timer.Minutes % 10;
+  Timer.Digits[2].Value = Timer.Seconds / 10;
+  Timer.Digits[3].Value = Timer.Seconds % 10;
+  }
+
+
+void FindMinSecs(){
+
+
+  Timer.Minutes = ((Timer.Digits[0].Value * 10) + Timer.Digits[1].Value);
+  Timer.Seconds = ((Timer.Digits[2].Value * 10) + Timer.Digits[3].Value);
+
+  }
+
+void DisplayTime(){
+/*
+  matrix.writeDigitNum(0, Timer.Digits[0].Value);
+  matrix.writeDigitNum(1, Timer.Digits[1].Value);
+  matrix.writeDigitNum(3, Timer.Digits[2].Value);
+  matrix.writeDigitNum(4, Timer.Digits[3].Value);
+*/
+
+  
+   matrix.clear();
+   SplitDigits();
+   if(Timer.Digits[0].On == true){
+      matrix.writeDigitNum(0,Timer.Digits[0].Value);
+    }
+    if(Timer.Digits[1].On == true){
+      matrix.writeDigitNum(1,Timer.Digits[1].Value);
+    }
+    if(Timer.Digits[2].On == true){
+      matrix.writeDigitNum(3,Timer.Digits[2].Value);
+    }
+    if(Timer.Digits[3].On == true){
+      matrix.writeDigitNum(4,Timer.Digits[3].Value);
+    }
+
+matrix.drawColon(true);
+ matrix.writeDisplay();
+
+  }
+
+
+
+void Blink(){
+ Timer.BlinkTime = millis();
+
+ if((Timer.BlinkTime - Timer.BlinkLastTime) > 1000){
+  if(Timer.Digits[Timer.Index].On == true){
+    Timer.Digits[Timer.Index].On = false;
+
+    }
+  else{
+    Timer.Digits[Timer.Index].On = true;
+
+    }
+    Timer.BlinkLastTime = Timer.BlinkTime;
+  }
+
+DisplayTime();
+  
+  }
+
+
+void BlinkAll(){
+ Timer.BlinkTime = millis();
+
+ if((Timer.BlinkTime - Timer.BlinkLastTime) > 1000){
+  if(Timer.Digits[Timer.Index].On == true){
+    Timer.Digits[0].On = false;
+    Timer.Digits[1].On = false;
+    Timer.Digits[2].On = false;
+    Timer.Digits[3].On = false;
+
+    }
+  else{
+    Timer.Digits[0].On = true;
+    Timer.Digits[1].On = true;
+    Timer.Digits[2].On = true;
+    Timer.Digits[3].On = true;
+
+    }
+    Timer.BlinkLastTime = Timer.BlinkTime;
+  }
+
+DisplayTime();
+  
+  }
+
+
+
+void NextIndex(){
+
+  if(Timer.Index == 3){
+    Timer.Index = 0;
+    }
+  else{
+    Timer.Index++;
+    }
+  }  
+
+void PreviousIndex(){
+
+  if(Timer.Index == 0){
+    Timer.Index = 3;
+    }
+  else{
+    Timer.Index--;
+    }
+  }  
+
+
+void IncreaseTimerDigit(){
+
+  
+  
+  if(Timer.Index == 2){
+    if(Timer.Digits[Timer.Index].Value == 5){
+      Timer.Digits[Timer.Index].Value = 0;
+      }
+    else{
+      Timer.Digits[Timer.Index].Value++;
+      }
+    }
+  else{
+    if(Timer.Digits[Timer.Index].Value == 9){
+      Timer.Digits[Timer.Index].Value = 0;
+      }
+    else{
+      Timer.Digits[Timer.Index].Value++;
+      }
+    
+    }
+
+    FindMinSecs();
+    DisplayTime();
+
+  }
+
+
+void DecreaseTimerDigit(){
+
+  if(Timer.Index == 2){
+    if(Timer.Digits[Timer.Index].Value == 0){
+      Timer.Digits[Timer.Index].Value = 5;
+      }
+    else{
+      Timer.Digits[Timer.Index].Value--;
+      }
+    }
+  else{
+    if(Timer.Digits[Timer.Index].Value == 0){
+      Timer.Digits[Timer.Index].Value = 9;
+      }
+    else{
+      Timer.Digits[Timer.Index].Value--;
+      }
+    
+    }
+    FindMinSecs();
+    DisplayTime();
+
+  }
+
+
+struct TimerDigit MakeTimerDigit(String Name, int Position){
+
+  struct TimerDigit Digit;
+  Digit.Name = Name;
+  Digit.Value = 0;
+  Digit.Position = Position;
+  Digit.On = true;
+
+  return Digit;
+
+  
+  }
+
+struct Timer MakeTimer(struct TimerDigit MinTens, struct TimerDigit MinOnes, struct TimerDigit SecTens, struct TimerDigit SecOnes){
+  struct Timer Timer;
+  Timer.Index = 0;
+  Timer.Digits[0] = MinTens;
+  Timer.Digits[1] = MinOnes;
+  Timer.Digits[2] = SecTens;
+  Timer.Digits[3] = SecOnes;
+  Timer.Minutes = 0;
+  Timer.Seconds = 0;
+  Timer.TimeOver = true;
+  Timer.LastTime = millis();
+  Timer.CurrTime = millis();
+  Timer.BlinkTime = millis();
+  Timer.BlinkLastTime = millis();
+  Timer.SetTime = millis();
+  Timer.SetLastTime = millis();
+  Timer.ChangeTime = false;
+  return Timer;
+  }
+
+
+
+/**********************************************************
+*Name:Up_Debounce
+*Purpose:checks debouncing time of up button and 
+*returns true if the button can be pressed again
+***********************************************************/
+bool UpDebounce(){
+     Up_button_time = millis();
+  if ( Up_button_time -  Up_last_button_time > DebounceTime)
+  {
+
+    Up_last_button_time  = Up_button_time;
+    return true;
+  }
+  return false;
+  }
+
+/**********************************************************
+*Name:DownDebounce
+*Purpose:checks debouncing time of brightness down button and 
+*returns true if the button can be pressed again
+***********************************************************/
+bool DownDebounce(){
+     Down_button_time = millis();
+  if ( Down_button_time -  Down_last_button_time > DebounceTime)
+  {
+
+    Down_last_button_time  = Down_button_time;
+    return true;
+  }
+  return false;
+  }
+
+/**********************************************************
+*Name:RightDebounce
+*Purpose:checks debouncing time of right button and 
+*returns true if the button can be pressed again
+***********************************************************/
+bool RightDebounce(){
+     Right_button_time = millis();
+  if ( Right_button_time -  Right_last_button_time > DebounceTime)
+  {
+
+    Right_last_button_time  = Right_button_time;
+    return true;
+  }
+  return false;
+  }
+
+/**********************************************************
+*Name:LeftDebounce
+*Purpose:checks debouncing time of left button and 
+*returns true if the button can be pressed again
+***********************************************************/
+bool LeftDebounce(){
+     Left_button_time = millis();
+  if ( Left_button_time -  Left_last_button_time > DebounceTime)
+  {
+
+    Left_last_button_time  = Left_button_time;
+    return true;
+  }
+  return false;
+  }
+
+/**********************************************************
+*Name:ConfirmDebounce
+*Purpose:checks debouncing time of confirm button and 
+*returns true if the button can be pressed again
+***********************************************************/
+bool ConfirmDebounce(){
+     Confirm_button_time = millis();
+  if ( Confirm_button_time -  Confirm_last_button_time > DebounceTime)
+  {
+
+    Confirm_last_button_time  = Confirm_button_time;
+    return true;
+  }
+  return false;
+  }
+
+/**********************************************************
+*Name:BackDebounce
+*Purpose:checks debouncing time of back button and 
+*returns true if the button can be pressed again
+***********************************************************/
+bool BackDebounce(){
+     Back_button_time = millis();
+  if ( Back_button_time -  Back_last_button_time > DebounceTime)
+  {
+
+    Back_last_button_time  = Back_button_time;
+    return true;
+  }
+  return false;
+  }
+
+
+
+
+
+bool SetTimeDebounce(){
+     Timer.SetTime = millis();
+  if ( Timer.SetTime -  Timer.SetLastTime > DebounceTime)
+  {
+
+    Timer.SetLastTime  = Timer.SetTime;
+    return true;
+  }
+  return false;
+  }
+
+
+
+void SetTimerPressed(){
+  //debounce
+if(SetTimeDebounce()){
+  Timer.ChangeTime = true;
+}
+  
+  
+  }
+
+
+void SetTimer(){
+
+
+ Timer.BlinkTime = millis();
+ Timer.BlinkLastTime = millis();
+ Timer.TimeOver = false;
+ struct Timer Copy = Timer;
+ Serial.println("in menu");
+     Timer.Digits[0].On = true;
+    Timer.Digits[1].On = true;
+    Timer.Digits[2].On = true;
+    Timer.Digits[3].On = true;
+ 
+
+/*
+
+  //need to save and restore the state of both teams in case interrupts happen
+  struct Team Team1Copy = Team1;
+  struct Team Team2Copy = Team2;
+  
+
+*/
+ 
+  //uses a busy waiting loop for this "menu". All buttons are used with polling
+  while(1){
+
+    Blink();
+    //DisplayTime();
+
+   
+
+    
+    //precedence=Confirm->Back->Right->Left->Up->Down
+   if(digitalRead(ConfirmButton) == LOW){
+
+    //debounce buttons
+    if(ConfirmDebounce()){
+
+      /*      Team1 = Team1Copy; 
+      Team2 = Team2Copy;*/
+      DisplayTime();
+      FindMinSecs();
+      Timer.ChangeTime = false;
+      Timer.Digits[Timer.Index].On = true;
+      Timer.Index = 0;
+      return;
+      
+    }
+    }
+   else if(digitalRead(BackButton) == LOW){
+    //debounce buttons
+    if(BackDebounce()){
+      /*      Team1 = Team1Copy; 
+      Team2 = Team2Copy;*/
+      Timer = Copy;
+      DisplayTime();
+      Timer.ChangeTime = false;
+      Timer.Digits[Timer.Index].On = true;
+      Timer.Index = 0;
+      //FindMinSecs();
+      return;
+    }
+    }
+   else if(digitalRead(ButtonRight) == LOW){
+    //debounce buttons
+    if(RightDebounce()){
+      Timer.Digits[Timer.Index].On = true;
+      NextIndex();
+      //Blink();
+      }
+      
+    }
+
+   else if(digitalRead(ButtonLeft) == LOW){
+    //debounce buttons
+    if(LeftDebounce()){
+      Timer.Digits[Timer.Index].On = true;
+      PreviousIndex();
+      //Blink();
+      }
+      
+    }
+       else if(digitalRead(ButtonUp) == LOW){
+    //debounce buttons
+    if(UpDebounce()){
+      Serial.println("up");
+      Timer.Digits[Timer.Index].On = true;
+     // Timer.Digits[Timer.Index].Value++;
+      //Serial.println(Timer.Digits[Timer.Index].Value);
+      IncreaseTimerDigit();
+      }
+     
+    }
+
+   else if(digitalRead(ButtonDown) == LOW){
+    //debounce buttons
+    if(DownDebounce()){
+      Serial.println("Down");
+      Timer.Digits[Timer.Index].On = true;
+     // Timer.Digits[Timer.Index].Value--;
+     // Serial.println(Timer.Digits[Timer.Index].Value);
+      DecreaseTimerDigit();
+      }
+
+   
+    }
+
+  }
+
+
+}
