@@ -68,12 +68,16 @@ Adafruit_7segment matrix = Adafruit_7segment();
   unsigned long Up_last_button_time = 0; 
   unsigned long Down_button_time = 0;  
   unsigned long Down_last_button_time = 0;
-  unsigned long Left_button_time = 0;  
+  unsigned long Left_button_time = 0;  c
   unsigned long Left_last_button_time = 0; 
   unsigned long Right_button_time = 0;  
   unsigned long Right_last_button_time = 0;
 
   int DebounceTime = 250;
+
+  int BlinkCount = 0; //keeps track of how many time lights blink
+
+  int TimeShift = 0;
 
 
 
@@ -133,7 +137,10 @@ if(Timer.TimeOver != true){
 
 }
 else{
+  //Serial.println("Blinking");
+  if(BlinkCount < 5){
   BlinkAll();
+  }
   }
 
 
@@ -144,7 +151,7 @@ Timer.CurrTime = millis();
 //Serial.println("in checktime");
 
 //a second passed
-if(Timer.CurrTime - Timer.LastTime >= 1000){
+if(Timer.CurrTime - Timer.LastTime >= (1000 - TimeShift)){
   if(Timer.Seconds == 0 && Timer.Minutes != 0){
     Timer.Minutes--;
     Timer.Seconds = 59;
@@ -159,8 +166,12 @@ if(Timer.CurrTime - Timer.LastTime >= 1000){
   else{
     Timer.Seconds--;
     }
+ Serial.print("Amount off: ");
+ Serial.println((Timer.CurrTime - Timer.LastTime) - (1000 - TimeShift));
+ TimeShift = ((Timer.CurrTime - Timer.LastTime) - (1000 - TimeShift));
  SplitDigits();
  Timer.LastTime = Timer.CurrTime;
+
 }
   
   }
@@ -222,12 +233,13 @@ void Blink(){
  Timer.BlinkTime = millis();
 
  if((Timer.BlinkTime - Timer.BlinkLastTime) > 1000){
-  if(Timer.Digits[Timer.Index].On == true){
-    Timer.Digits[Timer.Index].On = false;
+
+    if(Timer.Digits[Timer.Index].On == true){
+      Timer.Digits[Timer.Index].On = false;
 
     }
-  else{
-    Timer.Digits[Timer.Index].On = true;
+    else{
+      Timer.Digits[Timer.Index].On = true;
 
     }
     Timer.BlinkLastTime = Timer.BlinkTime;
@@ -242,20 +254,24 @@ void BlinkAll(){
  Timer.BlinkTime = millis();
 
  if((Timer.BlinkTime - Timer.BlinkLastTime) > 1000){
-  if(Timer.Digits[Timer.Index].On == true){
-    Timer.Digits[0].On = false;
-    Timer.Digits[1].On = false;
-    Timer.Digits[2].On = false;
-    Timer.Digits[3].On = false;
+    if(BlinkCount < 5){
+
+    if(Timer.Digits[Timer.Index].On == true){
+      Timer.Digits[0].On = false;
+      Timer.Digits[1].On = false;
+      Timer.Digits[2].On = false;
+      Timer.Digits[3].On = false;
 
     }
-  else{
-    Timer.Digits[0].On = true;
-    Timer.Digits[1].On = true;
-    Timer.Digits[2].On = true;
-    Timer.Digits[3].On = true;
+    else{
+      Timer.Digits[0].On = true;
+      Timer.Digits[1].On = true;
+      Timer.Digits[2].On = true;
+      Timer.Digits[3].On = true;
+      BlinkCount++; //count blinks when it turns on
 
     }
+ }
     Timer.BlinkLastTime = Timer.BlinkTime;
   }
 
@@ -288,8 +304,6 @@ void PreviousIndex(){
 
 void IncreaseTimerDigit(){
 
-  
-  
   if(Timer.Index == 2){
     if(Timer.Digits[Timer.Index].Value == 5){
       Timer.Digits[Timer.Index].Value = 0;
@@ -542,6 +556,9 @@ void SetTimer(){
       Timer.ChangeTime = false;
       Timer.Digits[Timer.Index].On = true;
       Timer.Index = 0;
+      Timer.CurrTime = millis();
+      Timer.LastTime = Timer.CurrTime;
+      BlinkCount = 0;
       return;
       
     }
