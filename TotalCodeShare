@@ -27,11 +27,13 @@
 
 
 /************Definitions of variables for NEOPixel**********************/
-#define NUMPIXELS 140 // 60 neopixels on string
+#define NUMPIXELS 70 // 60 neopixels on String
 #define SegSize 5 // number of pixels per segment
 int LastPixel = 0;//last used pixel on line
-#define NEOPIN 15 //Data pin for NEOPixel
+#define NEOPIN 15 //Data pin for Team1 Score
+#define NEOPIN2 4 //Data pin for Team2 score
 #define WINPIN 26 //data pin for win counter
+#define NUMWINPIXELS 6 //6 win counter pixels, two per team
 
 
 /************Definitions of variables for IRDiode**********************/
@@ -46,16 +48,13 @@ int BlinkCount = 0; //keeps track of how many time lights blink
 bool AtStart = true; //keeps track of if esp just booted up
 
 
-
-
-
-
-
 /******************Struct Definitions******************************/
 
 //A color struct used to pass into the RGBColor funciton later
 struct LEDColor {
-  String Name;
+  String Name; //name of the color
+
+  //RGB values
   int Red;
   int Green;
   int Blue;
@@ -68,17 +67,23 @@ struct Segment {
 
 //A number of several segments
 struct Digit {
+  //array of 7 light segments
   struct Segment Segments[7];
+
+  //value the digit holds
   int Value;
 };
 
 struct Team {
-  int Score;
-  int CurrentColor;
-  int Wins;
+  String name; //team1 or team2
+  int Score; //team's score
+  int CurrentColor; //spot in color array
+  int Wins; //amount of wins
   int FirstPixel; //index of firstpixel of first segment
-  int WinLED;
+  int WinLED; //index of first win led
   struct Digit Digits[2];
+
+  //booleans for state changes
   bool ColorChanged;
   bool ScoreChanged;
   bool WinsChanged;
@@ -98,20 +103,23 @@ struct Timer {
   int Seconds;
   bool TimeOver;
 
+  //used to find if a second passed
   int CurrTime;
   int LastTime;
 
+  //used to blink for one seconds
   int BlinkTime;
   int BlinkLastTime;
 
+  //used for changing the state of system
   int SetTime;
   int SetLastTime;
-
   bool ChangeTime;
 };
 
 
-Adafruit_7segment matrix = Adafruit_7segment(); //initialize seven-segment display
+
+
 
 
 //Make 4 digits for the timer
@@ -133,7 +141,7 @@ struct TimerDigit MakeTimerDigit(String Name, int Position);
 
 
 /******************Other Variables*******************************/
-int CurrentBrightness = 64; //Brightness of lights, 16->240
+int CurrentBrightness = 64; //Brightness of lights, 16->96
 bool BrightnessChanged = false; // used to indicate that the brightness has been changed and to refresh
 
 
@@ -145,20 +153,25 @@ bool BrightnessChanged = false; // used to indicate that the brightness has been
 IRrecv irrecv(RECV_PIN);
 
 //sets up the pixels object
-Adafruit_NeoPixel pixels(NUMPIXELS, NEOPIN, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel WinPixels(10, WINPIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels(NUMPIXELS, NEOPIN, NEO_GRB + NEO_KHZ800);//for team1 score
+Adafruit_NeoPixel pixels2(NUMPIXELS, NEOPIN2, NEO_GRB + NEO_KHZ800);//for team2 score
+Adafruit_NeoPixel WinPixels(NUMWINPIXELS, WINPIN, NEO_GRB + NEO_KHZ800);//for the win counters
 
 LEDColor RGBColors[16]; //create blank array of color structs
+
+Adafruit_7segment matrix = Adafruit_7segment(); //initialize seven-segment display
 
 //Declared here to be used later
 struct Digit MakeDigit();
 void DisplayScore(struct Team* Team);
-struct Team MakeTeam();
+struct Team MakeTeam(String name);
 void RefreshScore();
 
+
 //make the two teams
-struct Team Team1 = MakeTeam();
-struct Team Team2 = MakeTeam();
+struct Team Team1 = MakeTeam("Team1");
+struct Team Team2 = MakeTeam("Team2");
+
 
 
 
@@ -170,12 +183,15 @@ struct Team Team2 = MakeTeam();
 ***********************************************************/
 void setup()
 {
-//delay(500);
+
   Serial.begin(9600);
+  delay(300);
+
+
   IrReceiver.begin(RECV_PIN, ENABLE_LED_FEEDBACK); // Start the receiver
 
 
-  attachInterrupt(digitalPinToInterrupt(RECV_PIN),  ReadCommand, RISING);
+  attachInterrupt(digitalPinToInterrupt(RECV_PIN),  ReadCommand, FALLING);
 
   //Fills the array of colors
   SetColors();
@@ -192,8 +208,16 @@ void setup()
   Timer = MakeTimer(MinTens, MinOnes, SecTens, SecOnes);
 
 
+
+
   //initialize the display and set to all 0s
-  matrix.begin(); // setup timer seven segment display
+  //matrix.begin(); // setup timer seven segment display
+while(!matrix.begin()){
+  Serial.println("Can't find timer!");
+  delay(10);
+  }
+
+  
   matrix.writeDigitNum(0, 0); // displays all 0's starting with mintens spot
   matrix.writeDigitNum(1, 0, true); //minones
   matrix.writeDigitNum(3, 0); //sectens
@@ -206,21 +230,20 @@ void setup()
 
   //Setup the Neopixels
   pixels.begin(); // INITIALIZE NeoPixel strip
+  pixels2.begin(); // INITIALIZE NeoPixel strip
   WinPixels.begin();
   pixels.setBrightness(CurrentBrightness); // 1/4 brightness initially
+  pixels2.setBrightness(CurrentBrightness); // 1/4 brightness initially
   WinPixels.setBrightness(CurrentBrightness); // 1/4 brightness initially
   RefreshScore(); //output 00 in red
   DisplayWins();
   WinPixels.clear();
   pixels.clear(); // Set all pixel colors to 'off'
-
+  pixels2.clear(); // Set all pixel colors to 'off'
 
   //index first win counter led
   Team1.WinLED = 0;
-  Team2.WinLED = 5;
-
-//Reset_Pressed();
-  Serial.begin(9600);
+  Team2.WinLED = 3;
 
 
 }
@@ -234,7 +257,7 @@ void setup()
 void loop() {
 
   //if you have receieved a command
-  if (IrReceiver.decodedIRData.command >= 0 && IrReceiver.decodedIRData.command < 100) {
+  if (IrReceiver.decodedIRData.command > 0 && IrReceiver.decodedIRData.command < 100) {
     PerformCommand(); // do the command
   }
 
@@ -252,9 +275,9 @@ void loop() {
 
   }
   else {
-    if(!AtStart){
-    //blink all the lights
-    BlinkAll();
+    if (!AtStart) {
+      //blink all the lights
+      BlinkAll();
     }
   }
 
@@ -277,21 +300,16 @@ void loop() {
 
   if (Team1.WinsChanged == true) {
     IncreaseWins(&Team1);
-    Serial.print("Team1 Wins: ");
-    Serial.println(Team1.Wins);
-    //WinPixels.show();
   }
   if (Team2.WinsChanged == true) {
     IncreaseWins(&Team2);
-    Serial.print("Team2 Wins: ");
-    Serial.println(Team2.Wins);
-    //WinPixels.show();
   }
 
   //if brightness has been changed
   if (BrightnessChanged == true) {
     //Set new brightness and display
     pixels.setBrightness(CurrentBrightness);
+    pixels2.setBrightness(CurrentBrightness);
     WinPixels.setBrightness(CurrentBrightness);
     DisplayWins();
     RefreshScore();
@@ -325,8 +343,9 @@ void SetColors() {
   RGBColors[11] = {"Purple", 127, 0, 255};
   RGBColors[12] = {"Pink", 255, 0, 255};
   RGBColors[13] = {"Hot Pink", 255, 0, 127};
-  RGBColors[14] = {"Slate", 39, 55, 70};
-  RGBColors[15] = {"White", 255, 255, 255};
+  RGBColors[14] = {"Light Red", 255, 51, 51};
+  RGBColors[15] = {"Slate", 39, 55, 70};
+
 
 }
 
@@ -341,6 +360,7 @@ struct Digit MakeDigit() {
   for (int i = 0; i < 7; i++) {
     Digit.Segments[i] = MakeSegment();
   }
+  //LastPixel = 0;
   return Digit;
 }
 
@@ -363,16 +383,18 @@ struct Segment MakeSegment() {
   Name:MakeTeam
   Purpose:Creates a team struct with default values
 ***********************************************************/
-struct Team MakeTeam() {
+struct Team MakeTeam(String name) {
   struct Team Team;
+  Team.name = name;
   Team.ColorChanged = false;
   Team.ScoreChanged = false;
   Team.WinsChanged = false;
   Team.Score = 0;
   Team.CurrentColor = 0;
-  Team.FirstPixel = LastPixel;
+  Team.FirstPixel = 0; //LastPixel;
   Team.Digits[0] = MakeDigit();
   Team.Digits[1] = MakeDigit();
+  LastPixel = 0;
   Team.Wins = 0;
   return Team;
 
@@ -423,8 +445,8 @@ struct Timer MakeTimer(struct TimerDigit MinTens, struct TimerDigit MinOnes, str
   Purpose:Ups brightness if not at max
 ***********************************************************/
 void BrightnessUpPressed() {
-  //increase brightness if < 256
-  if (CurrentBrightness < 240) {
+  //increase brightness if < 96
+  if (CurrentBrightness < 96) {
     CurrentBrightness += 16;
     BrightnessChanged = true;
   }
@@ -462,7 +484,7 @@ void Team1_ScoreUpPressed() {
   Purpose:Lowers team1's score if not 0
 ***********************************************************/
 void Team1_ScoreDownPressed() {
-    Serial.print("Team1: ");
+  Serial.print("Team1: ");
   Serial.println(Team1.Score);
   //decrease score if not at 0
   if (Team1.Score > 0) {
@@ -476,7 +498,7 @@ void Team1_ScoreDownPressed() {
   Purpose:Ups team2's score if not maxed
 ***********************************************************/
 void Team2_ScoreUpPressed() {
-    Serial.print("Team2: ");
+  Serial.print("Team2: ");
   Serial.println(Team2.Score);
   //increase score if not at max
   if (Team2.Score < 99) {
@@ -490,7 +512,7 @@ void Team2_ScoreUpPressed() {
   Purpose:Lowers team2's score if not 0
 ***********************************************************/
 void Team2_ScoreDownPressed() {
-    Serial.print("Team2: ");
+  Serial.print("Team2: ");
   Serial.println(Team2.Score);
   //decrease score if not at 0
   if (Team2.Score > 0) {
@@ -536,6 +558,7 @@ void Team2_Win_Pressed() {
   Purpose:Sets all values to default
 ***********************************************************/
 void Reset_Pressed() {
+  Serial.println("In Reset pressed");
   //reset team values
   Team1.ColorChanged = false;
   Team1.ScoreChanged = false;
@@ -549,18 +572,31 @@ void Reset_Pressed() {
   Team2.Score = 0;
   Team2.Wins = 0;
   Team2.CurrentColor = 0;
+  // AtStart = true;
+  CurrentBrightness = 64;
 
   DisplayWins();
   RefreshScore();
 
-  CurrentBrightness = 64;
+  //CurrentBrightness = 64; //now commented as brightness should not be reset
 
   //reset timer
   Timer.Minutes = 0;
   Timer.Seconds = 0;
   Timer.TimeOver = true;
   Timer.ChangeTime = false;
+  Timer.Digits[0].On = true;
+  Timer.Digits[1].On = true;
+  Timer.Digits[2].On = true;
+  Timer.Digits[3].On = true;
+
   SplitDigits();
+  Serial.print("Displaying: ");
+  Serial.println(Timer.Minutes);
+  Serial.println(Timer.Seconds);
+  DisplayTime();
+
+
 
 }
 
@@ -578,7 +614,7 @@ bool Remote_Debounce() {
   Remote_time = millis();
 
   //if you have a good value and enough time has passed
-  if ( (Remote_time -  Remote_last_time > DebounceTime) && (IrReceiver.decodedIRData.command >= 0 && IrReceiver.decodedIRData.command < 100)) {
+  if ( (Remote_time -  Remote_last_time > DebounceTime) && (IrReceiver.decodedIRData.command > 0 && IrReceiver.decodedIRData.command < 100)) {
     Remote_last_time = Remote_time;
     return true;
   }
@@ -664,6 +700,10 @@ void PerformCommand() {
       Serial.println("Reset pressed");
       Reset_Pressed();
       break;
+    default:
+      Serial.println("default case");
+      IrReceiver.decodedIRData.command = -5;
+      break;
   }
   //reset so its known it is processed
   IrReceiver.decodedIRData.command = -5;
@@ -679,7 +719,6 @@ void PerformCommand() {
 ***********************************************************/
 void CheckTime() {
   Timer.CurrTime = millis();
-  //Serial.println("in checktime");
 
   //a second passed
   if (Timer.CurrTime - Timer.LastTime >= 1000) {
@@ -742,9 +781,9 @@ void DisplayTime() {
 
   //clear display
   matrix.clear();
-
   //find value of each digit
   SplitDigits();
+
 
   //display each digit
   if (Timer.Digits[0].On == true) {
@@ -764,6 +803,7 @@ void DisplayTime() {
   matrix.writeDisplay();
 
 }
+
 
 
 /**********************************************************
@@ -933,7 +973,8 @@ void DecreaseTimerDigit() {
   Purpose:Allows the user to set the timer start point
 ***********************************************************/
 void SetTimer() {
-AtStart = false;
+
+  AtStart = false;
   //setup all necessary variables
   Timer.BlinkTime = millis();
   Timer.BlinkLastTime = millis();
@@ -1048,18 +1089,35 @@ void RefreshScore() {
   Purpose:Turns a segment of a digit on
 ***********************************************************/
 void TurnSegOn(struct Segment Segment, struct Team Team) {
-  for (int i = 0; i < SegSize; i++) {
-    pixels.setPixelColor(Segment.Pixels[i], pixels.Color(RGBColors[Team.CurrentColor].Red, RGBColors[Team.CurrentColor].Green, RGBColors[Team.CurrentColor].Blue));
+
+  //set the colors of a segment for either team, need to split teams
+  //as they are a different data line
+  if (Team.name == "Team1") {
+    for (int i = 0; i < SegSize; i++) {
+      pixels.setPixelColor(Segment.Pixels[i], pixels.Color(RGBColors[Team.CurrentColor].Red, RGBColors[Team.CurrentColor].Green, RGBColors[Team.CurrentColor].Blue));
+    }
   }
+  else if (Team.name == "Team2") {
+    for (int i = 0; i < SegSize; i++) {
+      pixels2.setPixelColor(Segment.Pixels[i], pixels2.Color(RGBColors[Team.CurrentColor].Red, RGBColors[Team.CurrentColor].Green, RGBColors[Team.CurrentColor].Blue));
+    }
+  }
+
+
 }
 
 /**********************************************************
   Name:TurnSegOff
   Purpose:Turns off a segment in a digit
 ***********************************************************/
-void TurnSegOff(struct Segment Segment) {
+void TurnSegOff(struct Segment Segment, struct Team Team) {
   for (int i = 0; i < SegSize; i++) {
-    pixels.setPixelColor(Segment.Pixels[i], pixels.Color(0, 0, 0));
+    if (Team.name == "Team1") {
+      pixels.setPixelColor(Segment.Pixels[i], pixels.Color(0, 0, 0));
+    }
+    else {
+      pixels2.setPixelColor(Segment.Pixels[i], pixels2.Color(0, 0, 0));
+    }
   }
 }
 
@@ -1069,10 +1127,11 @@ void TurnSegOff(struct Segment Segment) {
   value
 ***********************************************************/
 void ChangeDigit(struct Digit* Digit, int Value, struct Team Team) {
-  TurnDigOff(*Digit);
+  TurnDigOff(*Digit, Team);
 
   Digit->Value = Value;
-
+  
+  //turn on different segments for each value
   if (Value == 0) {
     TurnSegOn(Digit->Segments[0], Team);
     TurnSegOn(Digit->Segments[1], Team);
@@ -1102,7 +1161,7 @@ void ChangeDigit(struct Digit* Digit, int Value, struct Team Team) {
   else if (Value == 4) {
     TurnSegOn(Digit->Segments[1], Team);
     TurnSegOn(Digit->Segments[2], Team);
-   // TurnSegOn(Digit->Segments[3], Team);
+    // TurnSegOn(Digit->Segments[3], Team);
     TurnSegOn(Digit->Segments[5], Team);
     TurnSegOn(Digit->Segments[6], Team);
   }
@@ -1142,21 +1201,22 @@ void ChangeDigit(struct Digit* Digit, int Value, struct Team Team) {
     TurnSegOn(Digit->Segments[6], Team);
   }
   pixels.show();
+  pixels2.show();
 }
 
 /**********************************************************
   Name:TurnDigOff
   Purpose:Turns off a digit completely
 ***********************************************************/
-void TurnDigOff(struct Digit Digit) {
+void TurnDigOff(struct Digit Digit, struct Team Team) {
   //turn all segments off
-  TurnSegOff(Digit.Segments[0]);
-  TurnSegOff(Digit.Segments[1]);
-  TurnSegOff(Digit.Segments[2]);
-  TurnSegOff(Digit.Segments[3]);
-  TurnSegOff(Digit.Segments[4]);
-  TurnSegOff(Digit.Segments[5]);
-  TurnSegOff(Digit.Segments[6]);
+  TurnSegOff(Digit.Segments[0], Team);
+  TurnSegOff(Digit.Segments[1], Team);
+  TurnSegOff(Digit.Segments[2], Team);
+  TurnSegOff(Digit.Segments[3], Team);
+  TurnSegOff(Digit.Segments[4], Team);
+  TurnSegOff(Digit.Segments[5], Team);
+  TurnSegOff(Digit.Segments[6], Team);
 }
 
 /**********************************************************
@@ -1170,6 +1230,13 @@ void IncreaseWins(struct Team* Team) {
     Team->Wins = 0;
   }
 
+  //reset scores for a new game
+  if(Team1.Score != 0 && Team2.Score != 0){
+    Team1.Score = 0;
+    Team2.Score = 0;
+    RefreshScore();
+    }
+
   //output to the win LEDS
   DisplayWins();
 }
@@ -1180,24 +1247,20 @@ void IncreaseWins(struct Team* Team) {
 ***********************************************************/
 void DisplayWins() {
   WinPixels.clear();
+  //Display first team's wins
   for (int i = 0; i < Team1.Wins; i++) {
     WinPixels.setPixelColor(i, WinPixels.Color(RGBColors[Team1.CurrentColor].Red, RGBColors[Team1.CurrentColor].Green, RGBColors[Team1.CurrentColor].Blue));
 
   }
-  for (int j = Team1.Wins; j < 3; j++) {
-   WinPixels.setPixelColor(j, 0, 0, 0);
-  }
-  for (int l = 5; l < Team2.Wins + 5; l++) {
+  //display 2nd team's wins
+  for (int l = 3; l < Team2.Wins + 3; l++) {
     WinPixels.setPixelColor(l, WinPixels.Color(RGBColors[Team2.CurrentColor].Red, RGBColors[Team2.CurrentColor].Green, RGBColors[Team2.CurrentColor].Blue));
 
   }
-  for (int g = Team2.Wins + 5; g < 10; g++) {
-    WinPixels.setPixelColor(g, 0, 0, 0);
+  WinPixels.show();   //output to the win LEDS
+  //WinPixels.show(); //maybe this fixes the noise on the first light?
 
-  }
-  WinPixels.show();
-
-  //output to the win LEDS
+  IrReceiver.decodedIRData.command = -5; // clear the ir receiver diode
 }
 
 
@@ -1207,7 +1270,6 @@ void DisplayWins() {
   Purpose:A menu to chnage team1's color using the DPad
 ***********************************************************/
 void Team1_ColorChange() {
-
 
 
   //need to save and restore the state of both teams in case interrupts happen
@@ -1233,9 +1295,7 @@ void Team1_ColorChange() {
 
       }
       else {
-
         switch (IrReceiver.decodedIRData.command) {
-
 
           //precedence=Confirm->Back->Right->Left->Up->Down
           case ConfirmButton:
@@ -1250,6 +1310,7 @@ void Team1_ColorChange() {
             return;
             break;
           case BackButton:
+            //setinputtime(); // set the time to record inputs
             Team1Copy.CurrentColor = OldColor;
             //reset teams state with old colors and display
             Serial.println("Back");
@@ -1259,6 +1320,7 @@ void Team1_ColorChange() {
             RefreshScore();
             Team1.ColorChanged = false;
             Team2.ColorChanged = false;
+            //displayoutputtime();
             return;
             break;
           case ButtonRight:
@@ -1322,7 +1384,6 @@ void Team1_ColorChange() {
 void Team2_ColorChange() {
 
 
-
   //need to save and restore the state of both teams in case interrupts happen
   struct Team Team1Copy = Team1;
   struct Team Team2Copy = Team2;
@@ -1339,7 +1400,6 @@ void Team2_ColorChange() {
 
   //uses a busy waiting loop for this "menu". All buttons are used with polling
   while (1) {
-    //Serial.println("inMenu");
     if (   IrReceiver.decode()) {
       if (!Remote_Debounce()) {
         IrReceiver.decodedIRData.command = -5;
@@ -1348,7 +1408,6 @@ void Team2_ColorChange() {
       else {
 
         switch (IrReceiver.decodedIRData.command) {
-
 
           //precedence=Confirm->Back->Right->Left->Up->Down
           case ConfirmButton:
@@ -1390,6 +1449,7 @@ void Team2_ColorChange() {
             break;
           case ButtonLeft:
           case ButtonDown:
+            //setinputtime(); // set the time to record inputs
             if (Team2Copy.CurrentColor != 0) {
               //go back one color
               Team2Copy.CurrentColor--;
