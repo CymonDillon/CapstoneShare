@@ -26,13 +26,24 @@
 
 
 
+bool Blocked = false; //blocks instructions while LEDs flashed
+
+
+/*********Definitions For Battery Indicator****************************/
+#define BatInput 35 //voltage level to D35
+#define BatRed 25 //red lead for LED
+#define BatBlue 32 //Blue Lead For LED
+#define BatGreen 33 //Green Lead for LED
+#define BatteryTime 10000 //read from battery level every 10 seconds
+
+
 /************Definitions of variables for NEOPixel**********************/
 #define NUMPIXELS 70 // 60 neopixels on String
 #define SegSize 5 // number of pixels per segment
 int LastPixel = 0;//last used pixel on line
 #define NEOPIN 15 //Data pin for Team1 Score
 #define NEOPIN2 4 //Data pin for Team2 score
-#define WINPIN 26 //data pin for win counter
+#define WINPIN 18 //data pin for win counter
 #define NUMWINPIXELS 6 //6 win counter pixels, two per team
 
 
@@ -46,6 +57,10 @@ int DebounceTime = 100; // debounces for 100 ms
 
 int BlinkCount = 0; //keeps track of how many time lights blink
 bool AtStart = true; //keeps track of if esp just booted up
+
+
+
+int TimeShift = 0; //used to keep track of the error of the timer
 
 
 /******************Struct Definitions******************************/
@@ -117,6 +132,17 @@ struct Timer {
   bool ChangeTime;
 };
 
+struct BatIndicator {
+  int PowerLevel; // 3 = high, 2 = med, 1 = low
+  int Voltage;
+  bool IfChanged;
+  int CurrentTime;
+  int LastTime;
+  int ChangeCount;
+  bool Start;
+
+};
+
 
 
 
@@ -145,6 +171,11 @@ int CurrentBrightness = 64; //Brightness of lights, 16->96
 bool BrightnessChanged = false; // used to indicate that the brightness has been changed and to refresh
 
 
+
+/********************Create Battery Indicator**********/
+struct BatIndicator BatIndicator;
+int LevelLow = 2900; //less than 45 minutes
+int LevelMed = 3071; //less than 90 minutes
 
 
 
@@ -211,13 +242,9 @@ void setup()
 
 
   //initialize the display and set to all 0s
-  //matrix.begin(); // setup timer seven segment display
-while(!matrix.begin()){
-  Serial.println("Can't find timer!");
-  delay(10);
-  }
+   matrix.begin(); // setup timer seven segment display
 
-  
+
   matrix.writeDigitNum(0, 0); // displays all 0's starting with mintens spot
   matrix.writeDigitNum(1, 0, true); //minones
   matrix.writeDigitNum(3, 0); //sectens
@@ -245,6 +272,27 @@ while(!matrix.begin()){
   Team1.WinLED = 0;
   Team2.WinLED = 3;
 
+  //Fill Battery Indicator with values
+  BatIndicator = MakeBatIndicator();
+
+
+  //Set ADC and LED pins
+  pinMode(BatInput, INPUT);
+  pinMode(BatRed, OUTPUT);
+  pinMode(BatGreen, OUTPUT);
+  pinMode(BatBlue, OUTPUT);
+
+  //Start with light off
+  digitalWrite(BatGreen, LOW);
+  digitalWrite(BatRed, LOW);
+  digitalWrite(BatBlue, LOW);
+
+  //check initial battery level and display
+  BatIndicator.ChangeCount = 10;
+
+  CheckBat();
+  ChangeBatLight();
+
 
 }
 
@@ -255,6 +303,9 @@ while(!matrix.begin()){
   functions
 ***********************************************************/
 void loop() {
+
+  CheckBat();//check the battery level
+
 
   //if you have receieved a command
   if (IrReceiver.decodedIRData.command > 0 && IrReceiver.decodedIRData.command < 100) {
@@ -268,7 +319,7 @@ void loop() {
   }
 
   //if the timer is not over
-  if (Timer.TimeOver != true) {
+  if (Timer.TimeOver != true && Blocked == false) {
     //check if a second passed
     CheckTime();
     DisplayTime();
@@ -316,6 +367,11 @@ void loop() {
     //change boolean so it isnt ran again
     BrightnessChanged = false;
   }
+
+
+  if (BatIndicator.IfChanged == true && Blocked == false) {
+    ChangeBatLight();
+  }
 }
 
 
@@ -348,6 +404,26 @@ void SetColors() {
 
 
 }
+
+/**********************************************************
+  Name:MakeBatIndicator
+  Purpose:Creates and returns a battery indicator struct
+***********************************************************/
+struct BatIndicator MakeBatIndicator() {
+  struct BatIndicator BatIndicator;
+  BatIndicator.PowerLevel = 0; // uninitiated
+  BatIndicator.IfChanged = false; // so first loop will turn on light
+  BatIndicator.Voltage = 0; //uninitiated
+  BatIndicator.CurrentTime = BatteryTime + 1; // 10 second difference so it initially reads
+  BatIndicator.LastTime = 0;
+  BatIndicator.ChangeCount = 0;
+  BatIndicator.Start = true; //for first read
+
+  return BatIndicator;
+
+}
+
+
 
 /**********************************************************
   Name:MakeDigit
@@ -578,8 +654,6 @@ void Reset_Pressed() {
   DisplayWins();
   RefreshScore();
 
-  //CurrentBrightness = 64; //now commented as brightness should not be reset
-
   //reset timer
   Timer.Minutes = 0;
   Timer.Seconds = 0;
@@ -650,7 +724,6 @@ void ReadCommand() {
 void PerformCommand() {
 
   Serial.println(IrReceiver.decodedIRData.command);
-
   switch (IrReceiver.decodedIRData.command) {
     case SetTimerButton:
       Serial.println("SetTimer");
@@ -718,27 +791,29 @@ void PerformCommand() {
   Purpose:Checks if the timer needs to be updated
 ***********************************************************/
 void CheckTime() {
-  Timer.CurrTime = millis();
+Timer.CurrTime = millis();
 
-  //a second passed
-  if (Timer.CurrTime - Timer.LastTime >= 1000) {
-    if (Timer.Seconds == 0 && Timer.Minutes != 0) {
-      Timer.Minutes--;
-      Timer.Seconds = 59;
+//a second passed
+if(Timer.CurrTime - Timer.LastTime >= (1000 - TimeShift)){
+  if(Timer.Seconds == 0 && Timer.Minutes != 0){
+    Timer.Minutes--;
+    Timer.Seconds = 59;
     }
-    else if (Timer.Seconds == 0 && Timer.Minutes == 0) {
-      //time over
-      Timer.Minutes = 0;
-      Timer.Seconds = 0;
-      Timer.TimeOver = true;
-      Serial.println("Time over!");
+  else if(Timer.Seconds == 0 && Timer.Minutes == 0){
+    //time over
+    Timer.Minutes = 0;
+    Timer.Seconds = 0;
+    Timer.TimeOver = true;
+    Serial.println("Time over!");
     }
-    else {
-      Timer.Seconds--;
+  else{
+    Timer.Seconds--;
     }
-    SplitDigits();
-    Timer.LastTime = Timer.CurrTime;
-  }
+ TimeShift = ((Timer.CurrTime - Timer.LastTime) - (1000 - TimeShift));
+ SplitDigits();
+ Timer.LastTime = Timer.CurrTime;
+
+}
 
 }
 
@@ -1080,8 +1155,10 @@ void DisplayScore(struct Team* Team) {
   Purpose:refreshes the scoreboard with both team's scores
 ***********************************************************/
 void RefreshScore() {
+  Blocked = true;
   DisplayScore(&Team1);
   DisplayScore(&Team2);
+  Blocked = false;
 }
 
 /**********************************************************
@@ -1130,7 +1207,7 @@ void ChangeDigit(struct Digit* Digit, int Value, struct Team Team) {
   TurnDigOff(*Digit, Team);
 
   Digit->Value = Value;
-  
+
   //turn on different segments for each value
   if (Value == 0) {
     TurnSegOn(Digit->Segments[0], Team);
@@ -1225,20 +1302,22 @@ void TurnDigOff(struct Digit Digit, struct Team Team) {
 ***********************************************************/
 void IncreaseWins(struct Team* Team) {
   Team->Wins++;
-  Team->WinsChanged = false;
+
   if (Team->Wins >= 4) {
     Team->Wins = 0;
   }
 
   //reset scores for a new game
-  if(Team1.Score != 0 && Team2.Score != 0){
+  if (Team1.Score != 0 || Team2.Score != 0) {
     Team1.Score = 0;
     Team2.Score = 0;
     RefreshScore();
-    }
+  }
 
   //output to the win LEDS
   DisplayWins();
+  Team1.WinsChanged = false;
+   Team2.WinsChanged = false;
 }
 
 /**********************************************************
@@ -1246,21 +1325,24 @@ void IncreaseWins(struct Team* Team) {
   Purpose:Display the amount of wins for a team
 ***********************************************************/
 void DisplayWins() {
+  Blocked = true;
   WinPixels.clear();
+  //WinPixels.show();
+
   //Display first team's wins
   for (int i = 0; i < Team1.Wins; i++) {
     WinPixels.setPixelColor(i, WinPixels.Color(RGBColors[Team1.CurrentColor].Red, RGBColors[Team1.CurrentColor].Green, RGBColors[Team1.CurrentColor].Blue));
 
   }
+  WinPixels.show();
   //display 2nd team's wins
   for (int l = 3; l < Team2.Wins + 3; l++) {
     WinPixels.setPixelColor(l, WinPixels.Color(RGBColors[Team2.CurrentColor].Red, RGBColors[Team2.CurrentColor].Green, RGBColors[Team2.CurrentColor].Blue));
 
   }
   WinPixels.show();   //output to the win LEDS
-  //WinPixels.show(); //maybe this fixes the noise on the first light?
-
   IrReceiver.decodedIRData.command = -5; // clear the ir receiver diode
+  Blocked = false;
 }
 
 
@@ -1479,4 +1561,117 @@ void Team2_ColorChange() {
   }
   Team1.ColorChanged = false;
   Team2.ColorChanged = false;
+}
+
+
+/**********************************************************
+  Name:CheckBat
+  Purpose:Checks if the battery power has changed and returns
+  the power level
+***********************************************************/
+void CheckBat() {
+
+  if (BatIndicator.Start != true) {
+    BatIndicator.CurrentTime = millis();
+  }
+  else {
+    BatIndicator.Start = false;
+  }
+  //read once every 3 seconds
+  if (BatIndicator.CurrentTime - BatIndicator.LastTime >= BatteryTime) {
+    BatIndicator.Voltage = analogRead(BatInput);
+
+    if ( BatIndicator.Voltage >= LevelMed && BatIndicator.PowerLevel != 3) {
+      //increase counter
+      BatIndicator.ChangeCount += 1;
+
+      //if ten counts in a row have had the same reading
+      if (BatIndicator.ChangeCount >= 10) {
+        //high power
+        BatIndicator.PowerLevel = 3;
+        //to make the light change
+        BatIndicator.IfChanged = true;
+        //reset counter
+        BatIndicator.ChangeCount = 0;
+      }
+
+    }
+    else if (BatIndicator.Voltage < LevelMed && BatIndicator.Voltage >= LevelLow && BatIndicator.PowerLevel != 2) {
+      //increase counter
+      BatIndicator.ChangeCount += 1;
+
+      //if ten counts in a row have had the same reading
+      if (BatIndicator.ChangeCount >= 10) {
+        //medium power
+        BatIndicator.PowerLevel = 2;
+        //to make the light change
+        BatIndicator.IfChanged = true;
+        //reset counter
+        BatIndicator.ChangeCount = 0;
+      }
+    }
+    else if (BatIndicator.Voltage < LevelLow && BatIndicator.PowerLevel != 1) {
+      //increase counter
+      BatIndicator.ChangeCount += 1;
+
+      //if ten counts in a row have had the same reading
+      if (BatIndicator.ChangeCount >= 10) {
+        //at low power
+        BatIndicator.PowerLevel = 1;
+        //to make the light change
+        BatIndicator.IfChanged = true;
+        //reset counter
+        BatIndicator.ChangeCount = 0;
+      }
+
+    }
+    else {
+      //if the power level has not changed, reset the counter
+      BatIndicator.ChangeCount = 0;
+    }
+
+    //change the timer
+    BatIndicator.LastTime = BatIndicator.CurrentTime;
+  }
+
+}
+
+
+
+/**********************************************************
+  Name:ChangeBatLight
+  Purpose:Changes the color of the battery indication light
+  based on the current power level
+***********************************************************/
+void ChangeBatLight() {
+
+  if (BatIndicator.PowerLevel == 3) {
+    //high power, turn on green light
+    digitalWrite(BatGreen, HIGH);
+    digitalWrite(BatRed, LOW);
+    digitalWrite(BatBlue, LOW);
+    //reset boolean
+    BatIndicator.IfChanged = false;
+  }
+  else if (BatIndicator.PowerLevel == 2) {
+    //medium power, turn on blue light
+    digitalWrite(BatGreen, LOW);
+    digitalWrite(BatRed, LOW);
+    digitalWrite(BatBlue, HIGH);
+    //reset boolean
+    BatIndicator.IfChanged = false;
+  }
+  else if (BatIndicator.PowerLevel == 1) {
+    //low power, turn on red light
+    digitalWrite(BatGreen, LOW);
+    digitalWrite(BatRed, HIGH);
+    digitalWrite(BatBlue, LOW);
+    //reset boolean
+    BatIndicator.IfChanged = false;
+  }
+  else {
+    //here for bug checking
+    Serial.println("none");
+  }
+
 }
